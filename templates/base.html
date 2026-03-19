@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}SpeedyPizza 🍕{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="{{ url_for('index') }}" class="logo">🍕 SpeedyPizza</a>
+        <div class="nav-links">
+            <a href="{{ url_for('index') }}">菜單</a>
+            <a href="{{ url_for('order') }}">我要訂購</a>
+            <a href="{{ url_for('order_status') }}">查詢訂單</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <p>&copy; 2024 SpeedyPizza — 快速、美味、安全（嗎？）的披薩</p>
+    </footer>
+</body>
+</html>
