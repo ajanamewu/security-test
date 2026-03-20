@@ -53,7 +53,7 @@ def index():
     """首頁：顯示披薩菜單"""
     db = get_db()
     pizzas = db.execute("SELECT * FROM pizzas").fetchall()
-    return render_template("index.html", pizzas=pizzas)
+    return render_template("index.html", pizzas=pizzas, database_name=app.config.get("DATABASE", DATABASE))
 
 
 @app.route("/order", methods=["GET", "POST"])
