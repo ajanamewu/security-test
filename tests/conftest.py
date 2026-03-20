@@ -1,7 +1,7 @@
 """
 SpeedyPizza 測試共用的 pytest fixtures
 """
-
+  
 import os
 import tempfile
 import sqlite3
