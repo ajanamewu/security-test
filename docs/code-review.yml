@@ -1,0 +1,176 @@
+ # 自動化程式碼審查
+   # 當 Pull Request 建立或更新時，自動執行程式碼品質檢查
+   name: "Code Review"
+   
+   on:
+     pull_request:
+       branches: [main]
+       types: [opened, synchronize, reopened]
+   
+   jobs:
+     # ─────────────────────────────────────────────
+     # 1. 程式碼風格與靜態分析
+     # ─────────────────────────────────────────────
+     lint:
+       name: 程式碼風格檢查
+       runs-on: ubuntu-latest
+   
+       steps:
+         - name: 取得原始碼
+           uses: actions/checkout@v4
+   
+         - name: 設定 Python 環境
+           uses: actions/setup-python@v5
+           with:
+             python-version: "3.11"
+   
+         - name: 安裝檢查工具
+           run: |
+             pip install flake8 bandit
+   
+         - name: Flake8 風格檢查
+           run: |
+             flake8 app.py config.py init_db.py \
+               --max-line-length=120 \
+               --statistics \
+               --count \
+               --show-source
+   
+         - name: Bandit 安全檢查
+           # Bandit 會檢查常見的 Python 安全問題（如 SQL Injection、硬編碼密碼等）
+           run: |
+             bandit -r app.py config.py init_db.py \
+               -f json \
+               -o bandit-report.json || true
+             bandit -r app.py config.py init_db.py \
+               --severity-level medium \
+               --confidence-level medium
+   
+         - name: 上傳 Bandit 報告
+           if: always()
+           uses: actions/upload-artifact@v4
+           with:
+             name: bandit-security-report
+             path: bandit-report.json
+   
+     # ─────────────────────────────────────────────
+     # 2. 單元測試 + 覆蓋率
+     # ─────────────────────────────────────────────
+     test:
+       name: 單元測試與覆蓋率
+       runs-on: ubuntu-latest
+   
+       steps:
+         - name: 取得原始碼
+           uses: actions/checkout@v4
+   
+         - name: 設定 Python 環境
+           uses: actions/setup-python@v5
+           with:
+             python-version: "3.11"
+   
+         - name: 安裝套件
+           run: |
+             pip install -r requirements.txt
+             pip install pytest-cov
+   
+         - name: 初始化測試資料庫
+           run: python init_db.py
+   
+         - name: 執行測試與覆蓋率報告
+           run: |
+             python -m pytest tests/ -v \
+               --cov=. \
+               --cov-report=term-missing \
+               --cov-report=html:coverage-report \
+               --cov-fail-under=60
+   
+         - name: 上傳覆蓋率報告
+           if: always()
+           uses: actions/upload-artifact@v4
+           with:
+             name: coverage-report
+             path: coverage-report/
+   
+     # ─────────────────────────────────────────────
+     # 3. PR 變更摘要（留言到 PR）
+     # ─────────────────────────────────────────────
+     pr-summary:
+       name: PR 變更分析
+       runs-on: ubuntu-latest
+       permissions:
+         pull-requests: write  # 必要：允許留言至 PR
+   
+       steps:
+         - name: 取得原始碼
+           uses: actions/checkout@v4
+           with:
+             fetch-depth: 0  # 取得完整歷史以比較差異
+   
+         - name: 分析變更並留言
+           uses: actions/github-script@v7
+           with:
+             script: |
+               const { data: files } = await github.rest.pulls.listFiles({
+                 owner: context.repo.owner,
+                 repo: context.repo.repo,
+                 pull_number: context.issue.number,
+               });
+   
+               let pyFiles = files.filter(f => f.filename.endsWith('.py'));
+               let htmlFiles = files.filter(f => f.filename.endsWith('.html'));
+               let totalAdditions = files.reduce((s, f) => s + f.additions, 0);
+               let totalDeletions = files.reduce((s, f) => s + f.deletions, 0);
+   
+               // 檢查是否有高風險變更
+               let warnings = [];
+               for (const file of files) {
+                 if (file.filename === 'config.py' && file.patch?.includes('KEY')) {
+                   warnings.push('⚠️ `config.py` 中偵測到金鑰相關變更，請確認未硬編碼秘密');
+                 }
+                 if (file.patch?.includes('db.execute') && !file.patch?.includes('?')) {
+                   warnings.push('⚠️ 偵測到 `db.execute()` 但未使用參數化查詢，可能有 SQL Injection 風險');
+                 }
+               }
+   
+               let body = `## 📊 PR 變更摘要\n\n`;
+               body += `| 類別 | 數量 |\n|------|------|\n`;
+               body += `| 變更檔案 | ${files.length} 個 |\n`;
+               body += `| Python 檔案 | ${pyFiles.length} 個 |\n`;
+               body += `| 模板檔案 | ${htmlFiles.length} 個 |\n`;
+               body += `| 新增行數 | +${totalAdditions} |\n`;
+               body += `| 刪除行數 | -${totalDeletions} |\n\n`;
+   
+               if (warnings.length > 0) {
+                 body += `### 🚨 安全提醒\n\n${warnings.join('\n')}\n\n`;
+               }
+   
+               body += `### 📁 變更檔案清單\n\n`;
+               for (const file of files) {
+                 const icon = file.status === 'added' ? '🆕' : file.status === 'removed' ? '🗑️' : '📝';
+                 body += `- ${icon} \`${file.filename}\` (+${file.additions}/-${file.deletions})\n`;
+               }
+   
+               // 尋找是否已有 bot 留言，有的話更新，否則新增
+               const { data: comments } = await github.rest.issues.listComments({
+                 owner: context.repo.owner,
+                 repo: context.repo.repo,
+                 issue_number: context.issue.number,
+               });
+               const botComment = comments.find(c => c.body.includes('PR 變更摘要'));
+   
+               if (botComment) {
+                 await github.rest.issues.updateComment({
+                   owner: context.repo.owner,
+                   repo: context.repo.repo,
+                   comment_id: botComment.id,
+                   body: body,
+                 });
+               } else {
+                 await github.rest.issues.createComment({
+                   owner: context.repo.owner,
+                   repo: context.repo.repo,
+                   issue_number: context.issue.number,
+                   body: body,
+                 });
+               }
